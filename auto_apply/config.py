@@ -1,4 +1,8 @@
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from a .env if present (project root or cwd)
+load_dotenv()
 
 
 class Config:

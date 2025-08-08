@@ -37,9 +37,10 @@ async def monitor_jobs():
         # Search
         keyword = job_search_config["keywords"][0]
         location = job_search_config["location"]
+        # Add Easy Apply filter (f_AL=true) where supported
         search_url = (
             f"https://www.linkedin.com/jobs/search/?keywords={keyword.replace(' ', '%20')}"
-            f"&location={location}&f_TP=1&f_E=1%2C2"
+            f"&location={location}&f_TP=1&f_E=1%2C2&f_AL=true"
         )
 
         jobs = []
@@ -54,20 +55,29 @@ async def monitor_jobs():
 
         for job_card in job_cards:
             try:
-                title = await job_card.query_selector_eval("h3", "el => el.innerText")
-                company = await job_card.query_selector_eval("h4", "el => el.innerText")
-                location = await job_card.query_selector_eval(
-                    ".job-card-container__metadata-item", "el => el.innerText"
-                )
-                job_url = await job_card.query_selector_eval("a", "el => el.href")
+                # Try multiple selectors for robustness
+                title_el = await job_card.query_selector("a.job-card-container__link, a.job-card-list__title, h3")
+                company_el = await job_card.query_selector("a.job-card-container__company-name, span.job-card-container__primary-description, h4")
+                location_el = await job_card.query_selector(".job-card-container__metadata-item, .job-card-container__metadata-item--location")
+                link_el = await job_card.query_selector("a.job-card-container__link, a.job-card-list__title, a")
 
-                jobs.append({
-                    "title": title.strip(),
-                    "company": company.strip(),
-                    "location": location.strip(),
-                    "url": job_url.strip(),
-                    "timestamp": datetime.datetime.now().isoformat()
-                })
+                title = (await title_el.inner_text()) if title_el else ""
+                company = (await company_el.inner_text()) if company_el else ""
+                location = (await location_el.inner_text()) if location_el else ""
+                job_url = (await link_el.get_attribute("href")) if link_el else ""
+                if job_url and job_url.startswith("/"):
+                    job_url = f"https://www.linkedin.com{job_url}"
+
+                # Do not pre-verify Easy Apply here; auto-apply will skip if not applicable
+
+                if job_url:
+                    jobs.append({
+                        "title": title.strip(),
+                        "company": company.strip(),
+                        "location": location.strip(),
+                        "url": job_url.strip(),
+                        "timestamp": datetime.datetime.now().isoformat()
+                    })
 
             except Exception as e:
                 print(f"Error parsing job card: {e}")
