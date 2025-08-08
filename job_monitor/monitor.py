@@ -2,6 +2,7 @@
 
 import asyncio
 import datetime
+import json
 import os
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
@@ -18,12 +19,20 @@ async def monitor_jobs():
         context = await browser.new_context()
         page = await context.new_page()
 
-        # Login
-        await page.goto("https://www.linkedin.com/login")
-        await page.fill("input#username", LINKEDIN_EMAIL)
-        await page.fill("input#password", LINKEDIN_PASSWORD)
-        await page.click("button[type=submit]")
-        await page.wait_for_url("https://www.linkedin.com/feed/")
+        # Login if credentials are present; otherwise continue anonymously
+        if LINKEDIN_EMAIL and LINKEDIN_PASSWORD:
+            await page.goto("https://www.linkedin.com/login")
+            await page.fill("input#username", LINKEDIN_EMAIL)
+            await page.fill("input#password", LINKEDIN_PASSWORD)
+            await page.click("button[type=submit]")
+            try:
+                await page.wait_for_url("https://www.linkedin.com/feed/", timeout=15000)
+            except Exception:
+                # Often redirects to checkpoint; allow manual intervention or continue to search
+                print("⚠️ Did not reach feed. If a checkpoint or MFA is shown, please complete it in the opened browser.")
+                await page.wait_for_timeout(5000)
+        else:
+            print("ℹ️ No credentials found. Proceeding without login.")
 
         # Search
         keyword = job_search_config["keywords"][0]
@@ -33,11 +42,15 @@ async def monitor_jobs():
             f"&location={location}&f_TP=1&f_E=1%2C2"
         )
 
-        await page.goto(search_url)
-        await page.wait_for_selector(".job-card-container")
-
-        job_cards = await page.query_selector_all(".job-card-container")
         jobs = []
+        try:
+            await page.goto(search_url)
+            await page.wait_for_selector(".job-card-container", timeout=20000)
+
+            job_cards = await page.query_selector_all(".job-card-container")
+        except Exception as e:
+            print(f"⚠️ Could not locate job cards: {e}")
+            job_cards = []
 
         for job_card in job_cards:
             try:
@@ -61,6 +74,23 @@ async def monitor_jobs():
 
         for job in jobs:
             print(f"\n🔹 {job['title']} at {job['company']} — {job['location']}\n{job['url']}\n")
+
+        # Persist to job_data.json for the auto-apply step
+        output = {
+            "jobs": [
+                {
+                    "title": j["title"],
+                    "company": j["company"],
+                    "link": j["url"],
+                    "timestamp": j["timestamp"],
+                }
+                for j in jobs
+            ]
+        }
+        data_path = os.path.join(os.path.dirname(__file__), "job_data.json")
+        with open(data_path, "w") as f:
+            json.dump(output, f, indent=2)
+        print(f"💾 Saved {len(jobs)} job(s) to {data_path}")
 
         await browser.close()
 
